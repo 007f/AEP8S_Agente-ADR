@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Agente de ADR</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;height:100vh;display:flex;flex-direction:column;color:#1a1a1a}
+header{display:flex;gap:8px;padding:8px 12px;background:#1f2937;flex-wrap:wrap}
+header input,header select{padding:6px;border-radius:4px;border:0}#key{width:230px}#dir{width:200px}
+main{flex:1;display:grid;grid-template-columns:230px 1fr 1fr;min-height:0}
+section{display:flex;flex-direction:column;min-height:0;border-right:1px solid #ddd;padding:10px}
+h3{margin:0 0 8px}#list{overflow:auto;flex:1}
+.adr{padding:6px;border:1px solid #ddd;border-radius:4px;margin-bottom:6px;font-size:12px}
+.adr button{font-size:11px;margin-top:4px}
+#chat{flex:1;overflow:auto}.m{padding:8px 10px;border-radius:8px;margin:6px 0;white-space:pre-wrap;max-width:92%}
+.u{background:#dbeafe;margin-left:auto}.a{background:#f3f4f6}.err{background:#fee2e2}
+.row{display:flex;gap:6px;margin-top:8px}.row textarea{flex:1;height:70px}
+textarea{font:13px ui-monospace,monospace}#md{flex:1}
+button{padding:6px 12px;cursor:pointer}#warn{font-size:12px;color:#92400e;white-space:pre-wrap}
+</style></head><body>
+<header>
+ <select id="prov"><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="groq">Groq</option><option value="ollama">Ollama (local, sem chave)</option></select>
+ <input id="model" placeholder="modelo">
+ <input id="key" type="password" placeholder="Chave de API (fica só neste navegador)">
+ <input id="dir" value="./adrs" title="Pasta das ADRs (.md)">
+ <button id="load">Carregar pasta</button>
+ <button id="new">Nova conversa</button>
+</header>
+<main>
+ <section><h3>ADRs existentes</h3><div id="list"></div></section>
+ <section><h3>Conversa</h3><div id="chat"></div>
+  <div class="row"><textarea id="in" placeholder="Descreva a decisão arquitetural..."></textarea>
+  <div style="display:flex;flex-direction:column;gap:6px"><button id="send">Enviar</button><button id="gen">Gerar ADR</button></div></div></section>
+ <section style="border:0"><h3>Rascunho (editável)</h3><div id="warn"></div>
+  <textarea id="md" placeholder="A ADR gerada aparece aqui para revisão."></textarea>
+  <div class="row"><button id="save">Salvar na pasta (status Proposto)</button><span id="fn"></span></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const DEF={anthropic:"claude-sonnet-5-5",openai:"gpt-4o",gemini:"gemini-3.8-flash",groq:"openai/gpt-oss-120b",ollama:"llama3.1"};
+let msgs=[],arquivo="";
+$('model').value=DEF.anthropic;$('prov').onchange=()=>$('model').value=DEF[$('prov').value];
+const cfg=()=>({provider:$('prov').value,model:$('model').value,api_key:$('key').value,dir:$('dir').value,messages:msgs});
+async function api(p,body){const r=await fetch('/api/'+p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+ const j=await r.json();if(!r.ok)throw new Error(j.detail||'Erro');return j}
+function say(t,c){const d=document.createElement('div');d.className='m '+c;d.textContent=t;$('chat').append(d);$('chat').scrollTop=1e9}
+async function lista(){try{const a=await api('adrs?dir='+encodeURIComponent($('dir').value));$('list').innerHTML='';
+ a.forEach(x=>{const d=document.createElement('div');d.className='adr';d.innerHTML=`<b></b><br>${x.status}`;d.querySelector('b').textContent=x.titulo;
+  if(x.status==='Proposto'){const b=document.createElement('button');b.textContent='Aprovar / Rejeitar';b.onclick=async()=>{
+   const n=prompt('Nome do responsável pela decisão:');if(!n)return;const s=confirm('OK = Aceito | Cancelar = Rejeitado')?'Aceito':'Rejeitado';
+   try{await api('status',{dir:$('dir').value,arquivo:x.arquivo,status:s,aprovador:n});lista()}catch(e){say(e.message,'err')}};d.append(b)}
+  $('list').append(d)})}catch(e){say(e.message,'err')}}
+$('load').onclick=lista;
+async function enviar(){const t=$('in').value.trim();if(!t)return;msgs.push({role:'user',content:t});say(t,'u');$('in').value='';
+ try{const r=await api('chat',cfg());msgs.push({role:'assistant',content:r.resposta});say(r.resposta+(r.pronto?'\n\n✅ Já há informação suficiente: clique em "Gerar ADR".':''),'a')}
+ catch(e){msgs.pop();$('in').value=t;say(e.message+' (sua mensagem foi preservada; tente novamente)','err')}}
+$('send').onclick=enviar;
+$('gen').onclick=async()=>{if(!msgs.length)return say('Converse primeiro sobre a decisão.','err');$('gen').disabled=true;$('gen').textContent='Gerando...';
+ try{const r=await api('generate',cfg());$('md').value=r.markdown;arquivo=r.arquivo;$('fn').textContent=r.arquivo;
+  $('warn').textContent=(r.pendencias.length?'Pendências:\n- '+r.pendencias.join('\n- '):'')+(r.conflitos.length?'\n\nPossíveis conflitos/relações:\n- '+r.conflitos.join('\n- '):'')}
+ catch(e){say(e.message,'err')}$('gen').disabled=false;$('gen').textContent='Gerar ADR'};
+$('save').onclick=async()=>{try{const r=await api('save',{dir:$('dir').value,arquivo,markdown:$('md').value});say('Salvo: '+r.arquivo,'a');lista()}catch(e){say(e.message,'err')}};
+$('in').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))enviar()});
+say('Olá! Descreva a decisão arquitetural que quer registrar (problema, contexto, alternativas). Eu pergunto o que faltar. Ctrl+Enter envia.','a');lista();
+$('new').onclick=()=>{if(msgs.length&&!confirm('Descartar a conversa e o rascunho atuais?'))return;
+ msgs=[];arquivo='';$('chat').innerHTML='';$('md').value='';$('warn').textContent='';$('fn').textContent='';
+ say('Nova conversa. Descreva a decisão arquitetural que quer registrar.','a');lista()};
+</script></body></html>
